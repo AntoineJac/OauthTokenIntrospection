@@ -22,6 +22,7 @@ jobs:
         kongVersion:
         - "2.8.x"
         - "3.4.x"
+        # - stable-ee" # require KONG_LICENSE_DATA
 
     steps:
     - uses: actions/checkout@v3
