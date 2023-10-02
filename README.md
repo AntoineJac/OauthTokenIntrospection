@@ -1,48 +1,44 @@
-# Kong plugin oauthTokenIntrospection
-====================
+# Kong Plugin: oauthTokenIntrospection
 
-This repository contains a Kong plugin template to verify
-several authentication methods using `Token Introspection` specification or `user id`.
+This repository contains a Kong plugin template that verifies authentication methods using the `Token Introspection` specification or `user id`.
 
+## Plugin Parameters
 
-## Plugins parameters
-=================================
+The following fields are available for plugin configuration, along with descriptions:
 
-The following fields are available for plugin configuration, with descriptions:
+| Key                     | Description                                                    | Data Type | Default Value                  | Required |
+| ----------------------- | -------------------------------------------------------------- | --------- | ------------------------------ | -------- |
+| introspection_host      | The host for the introspection endpoint                        | URL       | "https://introspection-host.com" | true     |
+| entitlement_host        | The host for the entitlement endpoint                          | URL       | "https://entitlement-host.com"  | false    |
+| token_location_xpath    | The XPath for the token location in the SOAP body envelope     | string    | "//soapenv:Header/ns:B2BContext/ns:AuthenticationToken" | false |
+| token_location_header   | The header for the token                                       | string    | "Authorization"                | false    |
+| userid_location_xpath  | The XPath for the user ID location in the SOAP body envelope  | string    | "//soapenv:Header/ns:B2BContext/ns:UserId"             | false |
+| iprange_whitelist       | The IP or CICD allowlist for the user ID flow                | array     | ["0.0.0.0/0"]                  | false    |
+| entitlement_required    | The required entitlement to authorize access to the service   | string    | "entitlement_check"            | true     |
+| shared_secret           | The shared secret between the API gateway and integration layer | string  | "secret"                       | true     |
+| verbose                 | Enable debugging and receive more information in response messages | boolean | false                        | false    |
+| cache_introspection     | The cache time-to-live (TTL) for introspection responses     | integer   | 300                            | true     |
+| cache_entitlement       | The cache TTL for entitlement responses                       | integer   | 300                            | true     |
+| auth_methods            | The allowed authentication methods for the service, respecting order for multiple values | array | ["soap_headers_flow", "rest_headers_flow", "user_id_flow"] | true |
 
-| Key     | Description | Data Type  | Default Value | Require |
-| ------- | ----------- | ---------- | ------------- | ------- |
-| introspection_host | The host for introspection endpoint | url | "https://introspection-host.com" | true |
-| entitlement_host | The host for entitlement endpoint | url | "https://entitlement-host.com" | false |
-| token_location_xpath | The XPath for the token location in the soap body envelope | string | "//soapenv:Header/ns:B2BContext/ns:AuthenticationToken" | false |
-| token_location_header | The header for the token | string | "Authorization" | false |
-| userid_location_xpath | The XPath for the token location in the soap body envelope | string | "//soapenv:Header/ns:B2BContext/ns:UserId" | false |
-| iprange_whitelist | The IP or CICD allow for the user ID flow | array | "0.0.0.0/0" | false |
-| entitlement_required | The require entitlement to authorize the request to access the service | string | "entitlement_check" | true |
-| shared_secret | The shared secret between API gateway & intergration layer | string | "secret" | true |
-| verbose | To help debugging and allow more information on the response message | boolean | false | false |
-| cache_introspection | The cache ttl for the introspection response | integer | 300 | true |
-| cache_entitlement | The cache ttl for the entitlement response | integer | 300 | true |
-| auth_methods | The authentication methods allow for the service, order will be respected in case of multiple values | array | ["soap_headers_flow", "rest_headers_flow", "user_id_flow"] | true |
+To allow all IPs in `iprange_whitelist`, use the value `0.0.0.0/0`.
 
-For the iprange_whitelist to allow all IPs use the value `0.0.0.0/0`
+**Important:** `applicationIdentifier` and `scopes` are optional and must be hardcoded in the plugin code.
 
-**Important:** applicationIdentifier and scopes are optional and must be hardcoded in the plugin code!
+## Example and Sample Data
 
+### Introspection Sample
 
-## Example and Sample data
--------
-
-* *Introspection*: `sample`
-```
+```json
 {
  "active": true,
  "client_id": "CCCCCC"
 }
 ```
 
-* *Entitlements*: this is for the `client id` flow
-```
+### Entitlements Sample (Client ID Flow)
+
+```json
 {
  "ClientId": "CCCCCC",
  "Entitlements": [
@@ -54,8 +50,9 @@ For the iprange_whitelist to allow all IPs use the value `0.0.0.0/0`
 }
 ```
 
-* *Entitlements*: this is for the `user id` flow
-```
+### Entitlements Sample (User ID Flow)
+
+```json
 {
  "applicationIdentifier": "ApiGateway",
  "userName": "UUUUUU",
@@ -66,5 +63,12 @@ For the iprange_whitelist to allow all IPs use the value `0.0.0.0/0`
   "F-BE-AP-SGE-AddressCityStreet"
  ]
 }
+
 ```
 
+Replace the sample data with your actual data and configure the plugin accordingly.
+
+
+This revised README.md includes corrected formatting and adds clarity to the descriptions of the plugin parameters and the sample data examples. Make sure to replace the sample data with your actual configuration.
+
+Happy Kong-ing!
