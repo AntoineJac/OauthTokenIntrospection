@@ -1,127 +1,70 @@
-[![Unix build](https://img.shields.io/github/actions/workflow/status/Kong/kong-plugin/test.yml?branch=master&label=Test&logo=linux)](https://github.com/Kong/kong-plugin/actions/workflows/test.yml)
-[![Luacheck](https://github.com/Kong/kong-plugin/workflows/Lint/badge.svg)](https://github.com/Kong/kong-plugin/actions/workflows/lint.yml)
-
-Kong plugin template
+# Kong plugin oauthTokenIntrospection
 ====================
 
-This repository contains a very simple Kong plugin template to get you
-up and running quickly for developing your own plugins.
-
-This template was designed to work with the
-[`kong-pongo`](https://github.com/Kong/kong-pongo) and
-[`kong-vagrant`](https://github.com/Kong/kong-vagrant) development environments.
-
-Please check out those repos `README` files for usage instructions. For a complete
-walkthrough check [this blogpost on the Kong website](https://konghq.com/blog/custom-lua-plugin-kong-gateway).
+This repository contains a Kong plugin template to verify
+several authentication methods using `Token Introspection` specification or `user id`.
 
 
-Naming and versioning conventions
+## Plugins parameters
 =================================
 
-There are a number "named" components and related versions. These are the conventions:
+The following fields are available for plugin configuration, with descriptions:
 
-* *Kong plugin name*: This is the name of the plugin as it is shown in the Kong
-  Manager GUI, and the name used in the file system. A plugin named `my-cool-plugin`
-  would have a `handler.lua` file at `./kong/plugins/my-cool-plugin/handler.lua`.
+| Key     | Description | Data Type  | Default Value | Require |
+| ------- | ----------- | ---------- | ------------- | ------- |
+| introspection_host | The host for introspection endpoint | url | "https://introspection-host.com" | true |
+| entitlement_host | The host for entitlement endpoint | url | "https://entitlement-host.com" | false |
+| token_location_xpath | The XPath for the token location in the soap body envelope | string | "//soapenv:Header/ns:B2BContext/ns:AuthenticationToken" | false |
+| token_location_header | The header for the token | string | "Authorization" | false |
+| userid_location_xpath | The XPath for the token location in the soap body envelope | string | "//soapenv:Header/ns:B2BContext/ns:UserId" | false |
+| iprange_whitelist | The IP or CICD allow for the user ID flow | array | "0.0.0.0/0" | false |
+| entitlement_required | The require entitlement to authorize the request to access the service | string | "entitlement_check" | true |
+| shared_secret | The shared secret between API gateway & intergration layer | string | "secret" | true |
+| verbose | To help debugging and allow more information on the response message | boolean | false | false |
+| cache_introspection | The cache ttl for the introspection response | integer | 300 | true |
+| cache_entitlement | The cache ttl for the entitlement response | integer | 300 | true |
+| auth_methods | The authentication methods allow for the service, order will be respected in case of multiple values | array | ["soap_headers_flow", "rest_headers_flow", "user_id_flow"] | true |
 
-* *Kong plugin version*: This is the version of the plugin code, expressed in
-  `x.y.z` format (using Semantic Versioning is recommended). This version should
-  be set in the `handler.lua` file as the `VERSION` property on the plugin table.
+For the iprange_whitelist to allow all IPs use the value `0.0.0.0/0`
 
-* *LuaRocks package name*: This is the name used in the LuaRocks eco system.
-  By convention this is `kong-plugin-[KongPluginName]`. This name is used
-  for the `rockspec` file, both in the filename as well as in the contents
-  (LuaRocks requires that they match).
+**Important:** applicationIdentifier and scopes are optional and must be hardcoded in the plugin code!
 
-* *LuaRocks package version*: This is the version of the package, and by convention
-  it should be identical to the *Kong plugin version*. As with the *LuaRocks package
-  name* the version is used in the `rockspec` file, both in the filename as well
-  as in the contents (LuaRocks requires that they match).
 
-* *LuaRocks rockspec revision*: This is the revision of the rockspec, and it only
-  changes if the rockspec is updated. So when the source code remains the same,
-  but build instructions change for example. When there is a new *LuaRocks package
-  version* the *LuaRocks rockspec revision* is reset to `1`. As with the *LuaRocks
-  package name* the revision is used in the `rockspec` file, both in the filename
-  as well as in the contents (LuaRocks requires that they match).
-
-* *LuaRocks rockspec name*: this is the filename of the rockspec. This is the file
-  that contains the meta-data and build instructions for the LuaRocks package.
-  The filename is `[package name]-[package version]-[package revision].rockspec`.
-
-Example
+## Example and Sample data
 -------
 
-* *Kong plugin name*: `my-cool-plugin`
-
-* *Kong plugin version*: `1.4.2` (set in the `VERSION` field inside `handler.lua`)
-
-This results in:
-
-* *LuaRocks package name*: `kong-plugin-my-cool-plugin`
-
-* *LuaRocks package version*: `1.4.2`
-
-* *LuaRocks rockspec revision*: `1`
-
-* *rockspec file*: `kong-plugin-my-cool-plugin-1.4.2-1.rockspec`
-
-* File *`handler.lua`* is located at: `./kong/plugins/my-cool-plugin/handler.lua` (and similar for the other plugin files)
-
-
-
-
-Initiate and launch Pongo:
+* *Introspection*: `sample`
 ```
-$ cd [plugin_directory]
-$ pongo run
-$ pongo shell
+{
+ "active": true,
+ "client_id": "CCCCCC"
+}
 ```
 
-In Pongo (kong) shell run in order:
-
-1- Start Kong Gateway
+* *Entitlements*: this is for the `client id` flow
 ```
-kong migrations bootstrap --force && kong start
-```
-
-2- create a service:
-```
-curl -i -X POST \
- --url http://localhost:8001/services/ \
- --data 'name=example-service' \
- --data 'url=http://httpbin.org/anything'
+{
+ "ClientId": "CCCCCC",
+ "Entitlements": [
+  "F-BE-AP-L7-TARIF-GEN",
+  "F-BE-AP-L7-TARIF-VEHICLE",
+  "F-BE-AP-SGE-AddressCity",
+  "F-BE-AP-SGE-AddressCityStreet"
+ ]
+}
 ```
 
-3- create a route:
+* *Entitlements*: this is for the `user id` flow
 ```
-curl -i -X POST \
- --url http://localhost:8001/services/example-service/routes \
- --data 'hosts[]=example.com' \
- --data 'paths[]=/test'
-```
-
-4- add plugin to the service:
-```
-curl -i -X POST \
- --url http://localhost:8001/services/example-service/plugins \
- --header 'content-type: application/json' \
- --data '{"name":"oauth-introspection","config":{"response_header":"antoinerequest","request_header":"antoineresponse"}}'
-
- curl -i -X POST \
- --url http://localhost:8001/services/example-service/plugins \
- --header 'content-type: application/json' \
- --data '{"name":"oauth-introspection","config":{"introspection_endpoint":"http://localhost:8000/demo", "clientinfo_endpoint":"http://localhost:8000/demo", "token_location_xpath":"antoineresponse", "entitlement_required":"antoineresponse", "soap_headers_flow":true }}'
+{
+ "applicationIdentifier": "ApiGateway",
+ "userName": "UUUUUU",
+ "entitlements": [
+  "F-BE-AP-L7-TARIF-GEN",
+  "F-BE-AP-L7-TARIF-VEHICLE",
+  "F-BE-AP-SGE-AddressCity",
+  "F-BE-AP-SGE-AddressCityStreet"
+ ]
+}
 ```
 
-curl -i -X DELETE "http://localhost:8001/plugins/0a1d4f07-bc71-49c7-b175-22d0ace42ed7"
-
-
-
-7- create a GET curl requests:
-```
-curl -i -X GET \
- --url http://localhost:8000/test \
- --header 'Host: example.com' \
- --header 'antoinerequest: testantoine'
-```

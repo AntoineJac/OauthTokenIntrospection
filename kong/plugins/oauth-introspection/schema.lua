@@ -1,24 +1,50 @@
 local typedefs = require "kong.db.schema.typedefs"
 
 local PLUGIN_NAME = "oauth-introspection"
-local cjson           = require "cjson"
 
 
-local function validate_parameters2(myArray)
+local function validate_auth_methods(auth_methods)
   -- explicit ngx.null comparisons needed below because of https://konghq.atlassian.net/browse/FT-3631
-  if not myArray or next(myArray) == nil then
+  if not auth_methods or next(auth_methods) == nil then
     -- The array is nil or empty, return false
-    return false, "at least one flow should be enable2!"
+    return false, "at least one of the soap_headers_flow, rest_headers_flow or user_id_flow options should be enable as auth_methods!"
   end
 
   return true
 end
 
+-- Function to check if a value is in an array
+function containsValue(arr, value)
+  if arr == nil then
+    return false
+  end
+
+  for _, v in ipairs(arr) do
+      if v == value then
+          return true -- Value found in the array
+      end
+  end
+
+  return false -- Value not found in the array
+end
+
 
 local function validate_parameters(config)
-  -- explicit ngx.null comparisons needed below because of https://konghq.atlassian.net/browse/FT-3631
-  if config.soap_headers_flow == false and config.rest_headers_slow == false and config.user_id_flow == false then
-    return false, "at least one flow should be enable!"
+
+  if containsValue(config.auth_methods, "soap_headers_flow") and config.token_location_xpath == ngx.null then
+    return false, "token_location_xpath is mandatory when soap_headers_flow is enable!"
+  end
+
+  if containsValue(config.auth_methods, "rest_headers_flow") and config.token_location_header == ngx.null then
+    return false, "token_location_header is mandatory when rest_headers_flow is enable!"
+  end
+
+  if containsValue(config.auth_methods, "user_id_flow") and config.userid_location_xpath == ngx.null then
+    return false, "userid_location_xpath is mandatory when user_id_flow is enable!"
+  end
+
+  if ( containsValue(config.auth_methods, "soap_headers_flow") or containsValue(config.auth_methods, "rest_headers_flow") ) and config.introspection_host == ngx.null then
+    return false, "introspection_host is mandatory when soap_headers_flow or rest_headers_flow is enable!"
   end
 
   return true
@@ -37,14 +63,14 @@ local schema = {
         custom_validator = validate_parameters,
         fields = {
           {
-            introspection_endpoint = typedefs.url {
-              required = true,
-              default = "http://127.0.0.1:8080/introspection"
+            introspection_host = typedefs.url {
+              required = false,
+              default = "https://introspection-host.com"
             }
           },{
-            clientinfo_endpoint = typedefs.url {
+            entitlement_host = typedefs.url {
               required = true,
-              default = "http://127.0.0.1:8080/clientinfo"
+              default = "https://entitlement-host.com"
             }
           },{
             token_location_xpath = {
@@ -65,8 +91,7 @@ local schema = {
             iprange_whitelist = {
               type = "array",
               elements = typedefs.ip_or_cidr,
-              required = false,
-              default = { "0.0.0.0/0" }
+              required = false
             } 
           },{
             entitlement_required = {
@@ -75,56 +100,51 @@ local schema = {
               default = "entitlement_check"
             }
           },{
-            soap_headers_flow = {
-              type = "boolean",
-              default = true,
+            shared_secret = {
+              type = "string",
+              required = true,
+              encrypted = true,
+              referenceable = true,
             }
           },{
-            rest_headers_slow = {
+            verbose = {
               type = "boolean",
-              default = true,
+              default = false
             }
           },{
-            user_id_flow = {
-              type = "boolean",
-              default = true,
+            cache_introspection = {
+              type = "integer",
+              required = true,
+              default = 300,
+              gt = 1
+            }
+          },{
+            cache_entitlement = {
+              type = "integer",
+              required = true,
+              default = 300,
+              gt = 1
             }
           },{
             auth_methods = {
               required = true,
-              custom_validator = validate_parameters2,
+              custom_validator = validate_auth_methods,
               type     = "array",
               default  = {
-                "password",
-                "client_credentials",
-                "authorization_code"
+                "soap_headers_flow",
+                "rest_headers_flow",
+                "user_id_flow"
               },
               elements = {
                 type   = "string",
                 one_of = {
-                  "password",
-                  "client_credentials",
-                  "authorization_code"
+                  "soap_headers_flow",
+                  "rest_headers_flow",
+                  "user_id_flow"
                 },
               },
             },
           },
-        },
-        entity_checks = {
-          -- add some validation rules across fields
-          -- the following is silly because it is always true, since they are both required
-          { conditional = {
-            if_field = "soap_headers_flow", if_match = { eq = true },
-            then_field = "token_location_xpath", then_match = { required = true },
-          } },
-          { conditional = {
-            if_field = "user_id_flow", if_match = { eq = true },
-            then_field = "userid_location_xpath", then_match = { required = true },
-          } },
-          { conditional = {
-            if_field = "rest_headers_slow", if_match = { eq = true },
-            then_field = "token_location_header", then_match = { required = true },
-          } },
         },
       },
     },

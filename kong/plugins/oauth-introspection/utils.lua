@@ -6,7 +6,7 @@ local http            = require "resty.http"
 local xmlua           = require("xmlua")
 local lrucache        = require "resty.lrucache"
 local ipmatcher       = require "resty.ipmatcher"
-local cjson           = require "cjson"
+local cjson           = require("cjson.safe")
 
 local cache = lrucache.new(512)
 
@@ -43,7 +43,6 @@ local function make_request(endpoint, params)
 
   -- return if error
   if err then
-    kong.log.debug("antoine make_request error", err )
     return nil, err
   end
 
@@ -54,66 +53,104 @@ local function make_request(endpoint, params)
   local success = res.status < 400
 
   if not success then
-    return nil, "status code: " .. tostring(res.status) .. " , body: " .. response_body
+    return nil, "statusCode: " .. tostring(res.status) .. " , Body (first 500 characters): " .. string.sub(response_body, 1, 500)
   end
 
   return response_body
 end
 
-local function call_introspection(endpoint, token)
+local function call_introspection(host, token)
+
+  local endpoint = host .. "/oauth/api/v2/token/introspect"
 
   local response_body, err = make_request(endpoint, {
     method = "POST",
-    body = token,
+    body = "token="..token,
     headers = { 
-      ["authorization"] = token
+      ["Content-Type"] = "application/x-www-form-urlencoded",
+      ["Accept"] = "application/json"
     },
     timeout = 20000
   })
 
   if err then
-    return nil, "Error with make_request when retrieving introspection: " .. err
+    return nil, "The introspection request return an error: " .. err
   end
 
-  response_body = cjson.decode(response_body)
+  response_body, err = cjson.decode(response_body)
+
+  if err then
+    return nil, "The introspection response is not a valid JSON"
+  end
 
   if not response_body.active then
-    return nil, "token is not active"
+    return nil, "The introspection show that token is not active"
   end
 
   if not response_body.client_id then
-    return nil, "no client_id"
+    return nil, "No client_id in the introspection response"
   end
 
   return response_body.client_id
 end
 
-local function call_entitlements(endpoint, userid)
+local function call_entitlements(host, userid, user_id_type)
+  local endpoint
+  local scopes = ""
+  local applicationIdentifier = ""
 
+  if user_id_type == "userid" then
+    endpoint = host .. "/oauth/v1/userinfo?userId=" .. userid .. "&scopes=" ..  scopes .. "&applicationIdentifier=" .. applicationIdentifier
+  end
+
+  if user_id_type == "clientid" then
+    endpoint = host .. "/clients/v1/clientinfo/" .. userid .. "?applicationIdentifier=" .. applicationIdentifier
+  end
+  
   local response_body, err = make_request(endpoint, {
-    method = "POST",
-    body = userid,
+    method = "GET",
     headers = { 
-      ["authorization"] = userid
+      ["Accept"] = "application/json"
     },
     timeout = 20000
   })
 
   if err then
-    return nil, "Error with make_request when retrieving entitlements: " .. err
+    return nil, "The entitlement request return an error: " .. err
   end
 
-  response_body = cjson.decode(response_body)
+  response_body, err = cjson.decode(response_body)
 
-  if not response_body.entitlements then
-    return nil, "no Entitlements"
+  if err then
+    return nil, "The entitlement response is not a valid JSON"
   end
 
-  return response_body.entitlements
+  if user_id_type == "userid" then
+    if not response_body.entitlements then
+      return nil, "No userid Entitlements in the entitlement response"
+    end
+
+    return response_body.entitlements
+  end
+
+  if user_id_type == "clientid" then
+    if not response_body.Entitlements then
+      return nil, "No clientid Entitlements in the entitlement response"
+    end
+
+    return response_body.Entitlements
+  end
+
+  return nil, "No Entitlements in the entitlement response"
 end
 
 
 function _M.check_entitlements(user_entitlements, plugin_entitlement)
+
+  if user_entitlements == nil then
+    return false, "No Entitlements in the entitlement response"
+  end
+
   -- Iterate through the array and check if the string is present
   for i, v in ipairs(user_entitlements) do
     if v == plugin_entitlement then
@@ -121,15 +158,20 @@ function _M.check_entitlements(user_entitlements, plugin_entitlement)
     end
   end
 
-  return nil, "user_entitlements are not authorized to access this service"
+  return false, "The User Entitlements are not authorized to access this service"
 end
 
-function _M.get_entitlements(endpoint, userid)
+function _M.get_entitlements(host, cache_ttl, user_credentials, user_id_type)
+
+  if user_credentials == nil then
+   return nil, "No user_credentials were found for all the flows"
+  end
+
   -- Calculate a cache key based on the URL using the hash_key function.
-  local token_cache_key = hash_key(userid)
+  local token_cache_key = hash_key(user_credentials)
   
   -- Try to retrieve the response_body from cache, with a TTL of 300 seconds, using the retrieveEntities function.
-  local user_entitlements, err = kong.cache:get(token_cache_key, { ttl = 300 }, call_entitlements, endpoint, userid)
+  local user_entitlements, err = kong.cache:get(token_cache_key, { ttl = cache_ttl }, call_entitlements, host, user_credentials, user_id_type)
 
   if err then
     return nil, "Error while retrieving entitlements: " .. err
@@ -138,16 +180,16 @@ function _M.get_entitlements(endpoint, userid)
   return user_entitlements
 end
 
-function _M.introspect_token(endpoint, token)
+function _M.introspect_token(host, cache_ttl, token)
 
   -- Calculate a cache key based on the URL using the hash_key function.
   local token_cache_key = hash_key(token)
 
   -- Try to retrieve the response_body from cache, with a TTL of 300 seconds, using the retrieveEntities function.
-  local client_id, err = kong.cache:get(token_cache_key, { ttl = 300 }, call_introspection, endpoint, token)
+  local client_id, err = kong.cache:get(token_cache_key, { ttl = cache_ttl }, call_introspection, host, token)
 
   if err then
-    return nil, "Error while retrieving introspection: " .. err
+    return nil, "Error during introspection - " .. err
   end
 
   return client_id
@@ -158,7 +200,7 @@ function _M.checkIpWhitelist(IpRange)
   local binary_remote_addr = ngx.var.binary_remote_addr
   
   if IpRange == nil then
-    return nil, "IpRange is nil"
+    return false, "IpRange is nil"
   end
 
   local matcher, err
@@ -167,19 +209,23 @@ function _M.checkIpWhitelist(IpRange)
   if not matcher then
     matcher, err = ipmatcher.new(IpRange)
     if err then
-      return error("failed to create a new ipmatcher instance: " .. err)
+      return false, "Failed to create a new ipmatcher instance: " .. err
     end
 
-    cache:set(IpRange, matcher, 300)
+    cache:set(IpRange, matcher, 3600)
   end
 
   local is_match
   is_match, err = matcher:match_bin(binary_remote_addr)
   if err then
-    return error("invalid binary ip address: " .. err)
+    return false, "Invalid binary ip address: " .. err
   end
 
-  return is_match
+  if not is_match then
+    return false, "IP address is not allowed"
+  end
+
+  return true
 end
 
 function _M.get_userid(XPath)
@@ -188,7 +234,7 @@ function _M.get_userid(XPath)
   local soapEnvelope = kong.request.get_raw_body()
 
   if soapEnvelope == nil then
-    return nil, "body is nil"
+    return nil, "The body of the request is nil"
   end
   
   -- Load the SOAP request XML into an XML document
@@ -200,52 +246,51 @@ function _M.get_userid(XPath)
 
     -- Check if the element was found
     if #selectedElement > 0 then
-        -- Extract the text content of the selected element
-        local value = selectedElement[1]:text()
-        return value
+      -- Extract the text content of the selected element
+      local userid = selectedElement[1]:text()
+
+      if userid == nil or #userid == 0 then
+        return nil, "No userid was found in the userid element"
+      end
+
+      return userid
     else
-        return nil, "Element not found"
+      return nil, "No Element was found for the userid XPath"
     end
   else
-    return nil, "Error when parsing: " .. document
+    return nil, "Error when parsing the request for retrieving the userid"
   end
 
 end
 
 
-function _M.get_credentials_soap(XPath, endpoint)
+function _M.get_credentials_soap(XPath, host, cache_ttl)
   
   -- Get SOAP envelope from the request
     local soapEnvelope = kong.request.get_raw_body()
   
     if soapEnvelope == nil then
-      return nil, "body is nil"
+      return nil, nil, "The body of the request is nil"
     end
-
-    kong.log.debug("the soapEnvelope is:", soapEnvelope)
 
     -- Load the SOAP request XML into an XML document
     local success, document = pcall(xmlua.XML.parse, soapEnvelope)
   
     if success then
 
-      kong.log.debug("antoine XPath is:", XPath)
       -- Use XPath to select the desired element
       local selectedElement = document:search(XPath)
-      
-      kong.log.debug("antoine after")
 
       -- Check if the element was found
       if #selectedElement > 0 then
         -- Extract the text content of the selected element
         local token = selectedElement[1]:text()
 
-        if token == nil then
-          kong.log.debug("method: soap_headers, token is nil")
-          return nil
+        if token == nil or #token == 0 then
+          return nil, nil, "No token was found in the token element"
         end
 
-        local user_credentials, errorMessage = _M.introspect_token(endpoint, token)
+        local user_credentials, errorMessage = _M.introspect_token(host, cache_ttl, token)
 
         if errorMessage then
           return nil, "Error while retrieving entities from cache for introspection: " .. errorMessage
@@ -258,181 +303,16 @@ function _M.get_credentials_soap(XPath, endpoint)
         -- Serialize the updated XML document back to a string
         local updatedSoapRequest = document:to_xml(options)
 
-        kong.log.debug("the updatedSoapRequest is:", updatedSoapRequest)
-
         kong.service.request.set_raw_body(updatedSoapRequest)
 
         return user_credentials
       else
-        kong.log.debug("method: soap_headers, token not found")
-        return nil
+        return nil, nil, "No Element was found for the token XPath"
       end
     else
-      kong.log.debug("Error when parsing: ", document)
-      return nil
+      return nil, nil, "Error when parsing the request for retrieving the token"
     end
     
   end
 
-
--- function find xpath
--- function _M.find_xpath(XMLtoSearch, XPath, XPathRegisterNs)
-  
---   kong.log.debug("RouteByXPath, XMLtoSearch: " .. XMLtoSearch)
-
---   local context = libxml2.xmlNewParserCtxt()
---   local document = libxml2.xmlCtxtReadMemory(context, XMLtoSearch)
-  
---   if not document then
---     return nil, "RouteByXPath, xmlCtxtReadMemory error, no document"
---   end
-  
---   local context = libxml2.xmlXPathNewContext(document)
-  
---   -- Register NameSpace(s)
---   kong.log.debug("XPathRegisterNs length: " .. #XPathRegisterNs)
-  
---   -- Go on each NameSpace definition
---   for i = 1, #XPathRegisterNs do
---     local prefix, uri
---     local j = XPathRegisterNs[i]:find(',', 1)
---     if j then
---       prefix  = string.sub(XPathRegisterNs[i], 1, j - 1)
---       uri     = string.sub(XPathRegisterNs[i], j + 1, #XPathRegisterNs[i])
---     end
---     local rc = false
---     if prefix and uri then
---       -- Register NameSpace
---       rc = libxml2.xmlXPathRegisterNs(context, prefix, uri)
---     end
---     if rc then
---       kong.log.debug("RouteByXPath, successful registering NameSpace for '" .. XPathRegisterNs[i] .. "'")
---     else
---       kong.log.err("RouteByXPath, failure registering NameSpace for '" .. XPathRegisterNs[i] .. "'")
---     end
---   end
-
---   local object = libxml2.xmlXPathEvalExpression(XPath, context)
-  
---   if object == ffi.NULL then
---     return nil, "RouteByXPath, object is null"
---   end
-
---   if object.nodesetval == ffi.NULL or object.nodesetval.nodeNr == 0 then        
---     return nil, "RouteByXPath, object.nodesetval is null"
---   end
-
---   local nodeContent = libxml2.xmlNodeGetContent(object.nodesetval.nodeTab[0])
-
---   return nodeContent
-
--- end
-
--- local function XSLTransform(soapEnvelope, user_credentials)
---   local errMessage  = ""
---   local err         = nil
---   local style       = nil
---   local xml_doc     = nil
---   local errDump     = 0
---   local xml_transformed_dump  = ""
---   local xmlNodePtrRoot        = nil
-  
---   kong.log.debug("XSLT transformation, BEGIN: " .. XMLtoTransform)
-
---   local default_parse_options = bit.bor(ffi.C.XML_PARSE_NOERROR,
---                                       ffi.C.XML_PARSE_NOWARNING)
-
---   -- Load the XSLT document
---   local xslt_doc, errMessage = libxml2ex.xmlReadMemory(XSLT, nil, nil, default_parse_options, verbose)
-  
---   if errMessage == nil then
---     -- Parse XSLT document
---     style = libxslt.xsltParseStylesheetDoc (xslt_doc)
---     if style ~= nil then
---       -- Load the complete XML document (with <soap:Envelope>)
---       xml_doc, errMessage = libxml2ex.xmlReadMemory(XMLtoTransform, nil, nil, default_parse_options, verbose)
---     else
---       errMessage = "error calling 'xsltParseStylesheetDoc'"
---     end
---   end
-
---   -- If the XSLT and the XML are correctly loaded and parsed
---   if errMessage == nil then
---     -- Transform the XML doc with XSLT transformation
---     local xml_transformed = libxslt.xsltApplyStylesheet (style, xml_doc)
-    
---     if xml_transformed ~= nil then
---       -- Dump into a String the canonized image of the XML transformed by XSLT
---       xml_transformed_dump, errDump = libxml2ex.xmlC14NDocSaveTo (xml_transformed, nil)
---       if errDump == 0 then
---         -- If needed we append the xml declaration
---         -- Example: <?xml version="1.0" encoding="utf-8"?>
---         xml_transformed_dump = xmlgeneral.XSLT_Format_XMLDeclaration (
---                                             plugin_conf, 
---                                             style.version, 
---                                             style.encoding,
---                                             style.omitXmlDeclaration, 
---                                             style.standalone, 
---                                             style.indent) .. xml_transformed_dump
-
---         -- Remove empty Namespace (example: xmlns="") added by XSLT library or transformation 
---         xml_transformed_dump = xml_transformed_dump:gsub(' xmlns=""', '')
---         kong.log.debug ("XSLT transformation, END: " .. xml_transformed_dump)
---       else
---         errMessage = "error calling 'xmlC14NDocSaveTo'"
---       end
---     else
---       errMessage = "error calling 'xsltApplyStylesheet'"
---     end
---   end
-  
---   if errMessage ~= nil then
---     kong.log.err ("XSLT transformation, errMessage: " .. errMessage)
---   end
-
---   -- xmlCleanupParser()
---   -- xmlMemoryDump()
-  
---   return xml_transformed_dump, errMessage
-  
-
--- end
-
-
-
--- function _M.replaceSoapHeaders (XPath, user_credentials)
-
---   -- Get SOAP envelope from the request
---   local soapEnvelope = kong.request.get_raw_body()
-
---   if soapEnvelope == nil then
---     return nil, "body is nil"
---   end
-  
---   -- Load the SOAP request XML into an XML document
---   local success, document = pcall(xmlua.XML.parse, soapEnvelope)
-
---   if success then
---     -- Use XPath to select the desired element
---     local selectedElement = document:search(XPath)
-
---     -- Check if the element was found
---     if #selectedElement > 0 then
---         -- Extract the text content of the selected element
---         selectedElement[1]:set_text(user_credentials)
-        
---         -- Serialize the updated XML document back to a string
---         local updatedSoapRequest = document:to_xml()
-
---         kong.service.request.set_raw_body(updatedSoapRequest)
---     else
---         return nil, "Element not found"
---     end
---   else
---     return nil, "Error when parsing: " .. document
---   end
-
--- end
-
--- return the lib
 return _M

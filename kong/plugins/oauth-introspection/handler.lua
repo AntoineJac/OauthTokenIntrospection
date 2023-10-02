@@ -5,73 +5,117 @@ local plugin = {
 }
 
 local utils = require "kong.plugins.oauth-introspection.utils"
-local cjson           = require "cjson"
+
 
 -- runs in the 'access_by_lua_block'
 function plugin:access(plugin_conf)
 
   local errorMessage
+  local errorDebug = ""
   local user_credentials
+  local user_id_type
   local user_entitlements
-  local jwtToken
   local valid_request
-  local replaceTokenType
 
-  kong.log.debug("Antoine auth_methods are: ", cjson.encode(plugin_conf.auth_methods))
 
-  kong.log.debug("Antoine auth_methods are: ", plugin_conf.auth_methods[1])
+  for key, auth_methods in ipairs(plugin_conf.auth_methods) do 
 
-  if plugin_conf.soap_headers_flow then
+    if auth_methods == "soap_headers_flow" then
+      local errorDebugSoap
+      user_credentials, errorMessage, errorDebugSoap = utils.get_credentials_soap(plugin_conf.token_location_xpath, plugin_conf.introspection_host, plugin_conf.cache_introspection)
 
-    user_credentials, errorMessage = utils.get_credentials_soap(plugin_conf.token_location_xpath, plugin_conf.introspection_endpoint)
+      if user_credentials ~= nil then
+        user_id_type = "userid"
+      end
 
-  end
+      if errorDebugSoap then
+        kong.log.debug("AuthFlow: soap_headers - Error: ", errorDebugSoap)
 
-  if plugin_conf.rest_headers_slow and errorMessage == nil then
-    -- get jwt token from header 
-    jwtToken = kong.request.get_headers()[plugin_conf.token_location_header]
+        if plugin_conf.verbose then
+          errorDebug = errorDebug .. "AuthFlow: soap_headers - Error: " .. errorDebugSoap
+        end
+      end
+    end
+  
+    if auth_methods == "rest_headers_flow" then
+      -- get jwt token from header 
+      local jwtToken = kong.request.get_headers()[plugin_conf.token_location_header]
+      if jwtToken ~= nil then
+        jwtToken = string.match(jwtToken, " (.+)")
+      end
+  
+      if jwtToken == nil then
+        kong.log.debug("AuthFlow: rest_headers - Error: token not found or incorrect")
 
-    if jwtToken == nil then
-      kong.log.debug("method: rest_headers, token not found")
+        if plugin_conf.verbose then
+          errorDebug = errorDebug .. "AuthFlow: rest_headers - Error: token not found or incorrect"
+        end
+      end
+  
+      if jwtToken ~= nil then
+        user_credentials, errorMessage = utils.introspect_token(plugin_conf.introspection_host, plugin_conf.cache_introspection, jwtToken)
+      end
+
+      if user_credentials ~= nil then
+        user_id_type = "userid"
+        kong.service.request.set_header("Authorization", user_credentials)
+      end
     end
 
-    if jwtToken ~= nil then
-      user_credentials, errorMessage = utils.introspect_token(plugin_conf.introspection_endpoint, jwtToken)
-      kong.service.request.set_header("Authorization", user_credentials)
+    if auth_methods == "user_id_flow" then
+
+      local ipCheck, errorDebugUserid = utils.checkIpWhitelist(plugin_conf.iprange_whitelist)
+      
+      if ipCheck then
+        user_credentials, errorDebugUserid = utils.get_userid(plugin_conf.userid_location_xpath)
+      end
+
+      if user_credentials ~= nil then
+        user_id_type = "clientid"
+      end
+
+      if errorDebugUserid then
+        kong.log.debug("AuthFlow: user_id - Error: ", errorDebugUserid)
+
+        if plugin_conf.verbose then
+          errorDebug = errorDebug .. "AuthFlow: user_id - Error: " .. errorDebugUserid
+        end
+      end
+    end
+
+    if errorMessage or user_credentials then
+      break
     end
 
   end
 
-  if plugin_conf.user_id_flow and errorMessage == nil then
-    local ipCheck, errorMessage = utils.checkIpWhitelist(plugin_conf.iprange_whitelist)
-    if ipCheck then
-      user_credentials, errorMessage = utils.get_userid(plugin_conf.userid_location_xpath)
-    end
+  if errorMessage == nil then
+    user_entitlements, errorMessage = utils.get_entitlements(plugin_conf.entitlement_host, plugin_conf.cache_entitlement, user_credentials, user_id_type)
   end
 
-  if user_credentials ~= nil then
-    user_entitlements, errorMessage = utils.get_entitlements(plugin_conf.clientinfo_endpoint,user_credentials)
-  elseif errorMessage == nil then
-    errorMessage = "user_credentials is empty"
-  end
-
-  if user_entitlements ~= nil then
+  if errorMessage == nil then
     valid_request, errorMessage= utils.check_entitlements(user_entitlements, plugin_conf.entitlement_required)
-  elseif errorMessage == nil then 
-    errorMessage = "user_entitlements is empty"
+  end
+
+  if not valid_request and errorMessage == nil then
+    errorMessage = "double check activated, please check code!"
   end
 
   if errorMessage then
+    if plugin_conf.verbose then
+      errorMessage = "{\"timestamp\":\"" .. ngx.time() .. "\", \"message\":\"Issue with OauthToken plugin!\", \"error\":\"" .. errorMessage .. "\", \"debug\":\"" .. errorDebug .. "\"}"
+    else
+      errorMessage = "{\"timestamp\":\"" .. ngx.time() .. "\", \"message\":\"Issue with OauthToken plugin!\", \"error\":\"" .. errorMessage .. "\"}"
+    end
+
     return kong.response.exit(401, errorMessage, {
-      ["Content-Type"] = "text/xml; charset=utf-8"
+      ["Content-Type"] = "application/problem+json"
     })
   end
 
-  kong.service.request.set_header("APIGW-Identity", "SSSSSS")
+  kong.service.request.set_header("APIGW-Identity", plugin_conf.shared_secret)
 
-
-end --]]
-
+end
 
 
 -- return our plugin object
