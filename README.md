@@ -67,3 +67,61 @@ This results in:
 * *rockspec file*: `kong-plugin-my-cool-plugin-1.4.2-1.rockspec`
 
 * File *`handler.lua`* is located at: `./kong/plugins/my-cool-plugin/handler.lua` (and similar for the other plugin files)
+
+
+
+
+Initiate and launch Pongo:
+```
+$ cd [plugin_directory]
+$ pongo run
+$ pongo shell
+```
+
+In Pongo (kong) shell run in order:
+
+1- Start Kong Gateway
+```
+kong migrations bootstrap --force && kong start
+```
+
+2- create a service:
+```
+curl -i -X POST \
+ --url http://localhost:8001/services/ \
+ --data 'name=example-service' \
+ --data 'url=http://httpbin.org/anything'
+```
+
+3- create a route:
+```
+curl -i -X POST \
+ --url http://localhost:8001/services/example-service/routes \
+ --data 'hosts[]=example.com' \
+ --data 'paths[]=/test'
+```
+
+4- add plugin to the service:
+```
+curl -i -X POST \
+ --url http://localhost:8001/services/example-service/plugins \
+ --header 'content-type: application/json' \
+ --data '{"name":"oauth-introspection","config":{"response_header":"antoinerequest","request_header":"antoineresponse"}}'
+
+ curl -i -X POST \
+ --url http://localhost:8001/services/example-service/plugins \
+ --header 'content-type: application/json' \
+ --data '{"name":"oauth-introspection","config":{"introspection_endpoint":"http://localhost:8000/demo", "clientinfo_endpoint":"http://localhost:8000/demo", "token_location_xpath":"antoineresponse", "entitlement_required":"antoineresponse", "soap_headers_flow":true }}'
+```
+
+curl -i -X DELETE "http://localhost:8001/plugins/0a1d4f07-bc71-49c7-b175-22d0ace42ed7"
+
+
+
+7- create a GET curl requests:
+```
+curl -i -X GET \
+ --url http://localhost:8000/test \
+ --header 'Host: example.com' \
+ --header 'antoinerequest: testantoine'
+```
