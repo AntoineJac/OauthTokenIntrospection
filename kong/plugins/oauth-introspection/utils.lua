@@ -48,8 +48,6 @@ local function make_request(endpoint, params)
 
   -- always read response body, even if we discard it without using it on success
   local response_body = res.body
-  local response_headers = res.headers
-  local response_status = res.status
   local success = res.status < 400
 
   if not success then

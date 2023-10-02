@@ -14,7 +14,7 @@ local function validate_auth_methods(auth_methods)
 end
 
 -- Function to check if a value is in an array
-function containsValue(arr, value)
+local function containsValue(arr, value)
   if arr == nil then
     return false
   end
