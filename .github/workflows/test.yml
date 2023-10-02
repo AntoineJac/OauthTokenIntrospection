@@ -21,10 +21,7 @@ jobs:
       matrix:
         kongVersion:
         - "2.8.x"
-        - "3.0.x"
-        - "dev"
-        - "3.0.0.x"
-        - "dev-ee"
+        - "3.4.x"
 
     steps:
     - uses: actions/checkout@v3
