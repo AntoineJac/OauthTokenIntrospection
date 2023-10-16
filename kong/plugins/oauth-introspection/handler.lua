@@ -25,7 +25,7 @@ function plugin:access(plugin_conf)
       user_credentials, errorMessage, errorDebugSoap = utils.get_credentials_soap(plugin_conf.token_location_xpath, plugin_conf.introspection_host, plugin_conf.cache_introspection)
 
       if user_credentials ~= nil then
-        user_id_type = "userid"
+        user_id_type = "clientid"
       end
 
       if errorDebugSoap then
@@ -57,7 +57,7 @@ function plugin:access(plugin_conf)
       end
 
       if user_credentials ~= nil then
-        user_id_type = "userid"
+        user_id_type = "clientid"
         kong.service.request.set_header("Authorization", user_credentials)
       end
     end
