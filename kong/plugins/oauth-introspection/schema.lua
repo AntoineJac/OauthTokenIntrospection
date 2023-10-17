@@ -107,6 +107,17 @@ local schema = {
               referenceable = true,
             }
           },{
+            scope = {
+              type = "string",
+              required = false,
+              default = "entitlements"
+            }
+          },{
+            application_identifier = {
+              type = "string",
+              required = false
+            }
+          },{
             verbose = {
               type = "boolean",
               default = false

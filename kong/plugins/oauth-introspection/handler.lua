@@ -15,6 +15,7 @@ function plugin:access(plugin_conf)
   local user_credentials
   local user_id_type
   local user_entitlements
+  local partner_user_identifier
   local valid_request
 
 
@@ -22,10 +23,10 @@ function plugin:access(plugin_conf)
 
     if auth_methods == "soap_headers_flow" then
       local errorDebugSoap
-      user_credentials, errorMessage, errorDebugSoap = utils.get_credentials_soap(plugin_conf.token_location_xpath, plugin_conf.introspection_host, plugin_conf.cache_introspection)
+      user_entitlements, errorMessage, errorDebugSoap = utils.get_credentials_soap(plugin_conf)
 
-      if user_credentials ~= nil then
-        user_id_type = "userid"
+      if user_entitlements ~= nil then
+        user_id_type = "clientid"
       end
 
       if errorDebugSoap then
@@ -57,8 +58,12 @@ function plugin:access(plugin_conf)
       end
 
       if user_credentials ~= nil then
-        user_id_type = "userid"
-        kong.service.request.set_header("Authorization", user_credentials)
+        user_id_type = "clientid"
+        user_entitlements, partner_user_identifier, errorMessage = utils.get_entitlements(plugin_conf.entitlement_host, plugin_conf.cache_entitlement, user_credentials, user_id_type, plugin_conf.scope, plugin_conf.application_identifier)
+      end
+
+      if partner_user_identifier ~= nil then
+        kong.service.request.set_header("Authorization", partner_user_identifier)
       end
     end
 
@@ -71,7 +76,8 @@ function plugin:access(plugin_conf)
       end
 
       if user_credentials ~= nil then
-        user_id_type = "clientid"
+        user_id_type = "userid"
+        user_entitlements, partner_user_identifier, errorMessage = utils.get_entitlements(plugin_conf.entitlement_host, plugin_conf.cache_entitlement, user_credentials, user_id_type, plugin_conf.scope, plugin_conf.application_identifier)
       end
 
       if errorDebugUserid then
@@ -83,14 +89,14 @@ function plugin:access(plugin_conf)
       end
     end
 
-    if errorMessage or user_credentials then
+    if errorMessage or user_entitlements then
       break
     end
 
   end
 
-  if errorMessage == nil then
-    user_entitlements, errorMessage = utils.get_entitlements(plugin_conf.entitlement_host, plugin_conf.cache_entitlement, user_credentials, user_id_type)
+  if user_entitlements == nil and errorMessage == nil then
+    errorMessage = "No user_credentials were found for all the flows"
   end
 
   if errorMessage == nil then
@@ -113,7 +119,7 @@ function plugin:access(plugin_conf)
     })
   end
 
-  kong.service.request.set_header("APIGW-Identity", plugin_conf.shared_secret)
+  kong.service.request.set_header("L7-Identity", plugin_conf.shared_secret)
 
 end
 

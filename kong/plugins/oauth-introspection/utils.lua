@@ -92,10 +92,10 @@ local function call_introspection(host, token)
   return response_body.client_id
 end
 
-local function call_entitlements(host, userid, user_id_type)
+local function call_entitlements(host, userid, user_id_type, scope, application_identifier)
   local endpoint
-  local scopes = ""
-  local applicationIdentifier = ""
+  local scopes = scope or ""
+  local applicationIdentifier = application_identifier or ""
 
   if user_id_type == "userid" then
     endpoint = host .. "/oauth/v1/userinfo?userId=" .. userid .. "&scopes=" ..  scopes .. "&applicationIdentifier=" .. applicationIdentifier
@@ -128,7 +128,7 @@ local function call_entitlements(host, userid, user_id_type)
       return nil, "No userid Entitlements in the entitlement response"
     end
 
-    return response_body.entitlements
+    return { user_entitlements = response_body.entitlements }
   end
 
   if user_id_type == "clientid" then
@@ -136,7 +136,11 @@ local function call_entitlements(host, userid, user_id_type)
       return nil, "No clientid Entitlements in the entitlement response"
     end
 
-    return response_body.Entitlements
+    if not response_body.PartnerUserIdentifier then
+      return nil, "No partner user Identifier in the entitlement response"
+    end
+
+    return { user_entitlements = response_body.Entitlements, partner_user_identifier = response_body.PartnerUserIdentifier }
   end
 
   return nil, "No Entitlements in the entitlement response"
@@ -159,23 +163,23 @@ function _M.check_entitlements(user_entitlements, plugin_entitlement)
   return false, "The User Entitlements are not authorized to access this service"
 end
 
-function _M.get_entitlements(host, cache_ttl, user_credentials, user_id_type)
+function _M.get_entitlements(host, cache_ttl, user_credentials, user_id_type, scope, application_identifier)
 
   if user_credentials == nil then
-   return nil, "No user_credentials were found for all the flows"
+   return nil, nil, "No user_credentials were found for all the flows"
   end
 
   -- Calculate a cache key based on the URL using the hash_key function.
   local token_cache_key = hash_key(user_credentials)
   
   -- Try to retrieve the response_body from cache, with a TTL of 300 seconds, using the retrieveEntities function.
-  local user_entitlements, err = kong.cache:get(token_cache_key, { ttl = cache_ttl }, call_entitlements, host, user_credentials, user_id_type)
+  local entitlements_response, err = kong.cache:get(token_cache_key, { ttl = cache_ttl }, call_entitlements, host, user_credentials, user_id_type, scope, application_identifier)
 
   if err then
-    return nil, "Error while retrieving entitlements: " .. err
+    return nil, nil, "Error while retrieving entitlements: " .. err
   end
 
-  return user_entitlements
+  return entitlements_response.user_entitlements, entitlements_response.partner_user_identifier
 end
 
 function _M.introspect_token(host, cache_ttl, token)
@@ -262,7 +266,7 @@ function _M.get_userid(XPath)
 end
 
 
-function _M.get_credentials_soap(XPath, host, cache_ttl)
+function _M.get_credentials_soap(plugin_conf)
   
   -- Get SOAP envelope from the request
     local soapEnvelope = kong.request.get_raw_body()
@@ -277,7 +281,7 @@ function _M.get_credentials_soap(XPath, host, cache_ttl)
     if success then
 
       -- Use XPath to select the desired element
-      local selectedElement = document:search(XPath)
+      local selectedElement = document:search(plugin_conf.token_location_xpath)
 
       -- Check if the element was found
       if #selectedElement > 0 then
@@ -288,13 +292,20 @@ function _M.get_credentials_soap(XPath, host, cache_ttl)
           return nil, nil, "No token was found in the token element"
         end
 
-        local user_credentials, errorMessage = _M.introspect_token(host, cache_ttl, token)
+        local user_credentials, errorMessage = _M.introspect_token(plugin_conf.introspection_host, plugin_conf.cache_introspection, token)
 
         if errorMessage then
           return nil, "Error while retrieving entities from cache for introspection: " .. errorMessage
         end
 
-        selectedElement[1]:set_content(user_credentials)
+        local user_id_type = "clientid"
+        local user_entitlements, partner_user_identifier, errorMessage = _M.get_entitlements(plugin_conf.entitlement_host, plugin_conf.cache_entitlement, user_credentials, user_id_type, plugin_conf.scope, plugin_conf.application_identifier)
+
+        if errorMessage then
+          return nil, "Error when retrieving the entitlements: " .. errorMessage
+        end
+
+        selectedElement[1]:set_content(partner_user_identifier)
         
         local options = {}
         options.include_declaration = false
@@ -303,7 +314,7 @@ function _M.get_credentials_soap(XPath, host, cache_ttl)
 
         kong.service.request.set_raw_body(updatedSoapRequest)
 
-        return user_credentials
+        return user_entitlements
       else
         return nil, nil, "No Element was found for the token XPath"
       end
