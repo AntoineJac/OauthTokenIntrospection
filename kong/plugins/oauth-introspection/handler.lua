@@ -25,10 +25,6 @@ function plugin:access(plugin_conf)
       local errorDebugSoap
       user_entitlements, errorMessage, errorDebugSoap = utils.get_credentials_soap(plugin_conf)
 
-      if user_entitlements ~= nil then
-        user_id_type = "clientid"
-      end
-
       if errorDebugSoap then
         kong.log.debug("AuthFlow: soap_headers - Error: ", errorDebugSoap)
 
